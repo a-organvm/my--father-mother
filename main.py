@@ -6,6 +6,7 @@ my--father-mother: lightweight local clipboard long-term memory.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -28,6 +29,10 @@ from typing import Optional, Tuple, Iterable, Dict
 DB_DIR = Path.home() / ".my-father-mother"
 DB_PATH = DB_DIR / "mfm.db"
 ICLOUD_DRIVE_DIR = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+ENCRYPTED_DB_MAGIC = b"MFMDB-AES256-GCM\0"
+ENCRYPTED_DB_NONCE_BYTES = 12
+KEYCHAIN_SERVICE = "my--father-mother"
+KEYCHAIN_ACCOUNT = "mfm.db.aes256gcm"
 
 MOTHER = "mother"  # capture persona (moon domain)
 FATHER = "father"  # retrieval persona (sun domain)
@@ -49,9 +54,7 @@ DEFAULT_UI_METRICS = "default"
 DEFAULT_UI_TOOLBAR = "suggested"
 DEFAULT_PERSONAL_CLOUD_STATUS = "disconnected"
 
-LEMON_SQUEEZY_CHECKOUT_URL = (
-    "https://my-father-mother.lemonsqueezy.com/checkout/buy/"
-)
+LEMON_SQUEEZY_CHECKOUT_URL = "https://my-father-mother.lemonsqueezy.com/checkout/buy/"
 DEFAULT_UPGRADE_URL = "https://gumroad.com/l/my-father-mother-pro"
 
 DEFAULT_MAX_BYTES = 16_384  # ~16 KB
@@ -144,13 +147,310 @@ def toast(title: str, text: str) -> None:
 
 
 # ---------- Database setup ----------
-def connect_db() -> sqlite3.Connection:
+def encrypted_db_lock_path() -> Path:
+    return DB_PATH.with_name(f"{DB_PATH.name}.lock")
+
+
+def encrypted_db_sidecar_paths() -> list[Path]:
+    return sqlite_sidecar_paths(DB_PATH)
+
+
+def sqlite_sidecar_paths(path: Path) -> list[Path]:
+    base = str(path)
+    return [Path(f"{base}-wal"), Path(f"{base}-shm"), Path(f"{base}-journal")]
+
+
+def cleanup_db_sidecars() -> None:
+    for path in encrypted_db_sidecar_paths():
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def secure_db_dir() -> None:
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    try:
+        os.chmod(DB_DIR, 0o700)
+    except OSError:
+        pass
+
+
+def is_encrypted_db_file(path: Optional[Path] = None) -> bool:
+    target = path or DB_PATH
+    try:
+        with target.open("rb") as f:
+            return f.read(len(ENCRYPTED_DB_MAGIC)) == ENCRYPTED_DB_MAGIC
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+
+
+def load_aesgcm_class():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError as e:
+        raise RuntimeError(
+            "encrypted DB support requires the optional 'cryptography' package"
+        ) from e
+    return AESGCM
+
+
+def encrypt_db_bytes(plaintext: bytes, key: bytes) -> bytes:
+    if len(key) != 32:
+        raise RuntimeError("encrypted DB key must be 32 bytes for AES-256-GCM")
+    nonce = os.urandom(ENCRYPTED_DB_NONCE_BYTES)
+    aesgcm = load_aesgcm_class()(key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext, ENCRYPTED_DB_MAGIC)
+    return ENCRYPTED_DB_MAGIC + nonce + ciphertext
+
+
+def decrypt_db_bytes(payload: bytes, key: bytes) -> bytes:
+    if len(key) != 32:
+        raise RuntimeError("encrypted DB key must be 32 bytes for AES-256-GCM")
+    if not payload.startswith(ENCRYPTED_DB_MAGIC):
+        raise RuntimeError("database is not in the mfm encrypted format")
+    start = len(ENCRYPTED_DB_MAGIC)
+    nonce = payload[start : start + ENCRYPTED_DB_NONCE_BYTES]
+    ciphertext = payload[start + ENCRYPTED_DB_NONCE_BYTES :]
+    if len(nonce) != ENCRYPTED_DB_NONCE_BYTES or not ciphertext:
+        raise RuntimeError("encrypted DB file is truncated")
+    aesgcm = load_aesgcm_class()(key)
+    try:
+        return aesgcm.decrypt(nonce, ciphertext, ENCRYPTED_DB_MAGIC)
+    except Exception as e:
+        raise RuntimeError(
+            "failed to decrypt DB; Keychain key may be missing or wrong"
+        ) from e
+
+
+def read_keychain_password(service: str, account: str) -> Optional[str]:
+    if platform.system() != "Darwin" or not shutil.which("security"):
+        raise RuntimeError(
+            "encrypted DB keys require macOS Keychain via the 'security' command"
+        )
+    proc = subprocess.run(
+        ["security", "find-generic-password", "-a", account, "-s", service, "-w"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return proc.stdout.rstrip("\n")
+    err = (proc.stderr or "").strip().lower()
+    if "could not be found" in err or "item not found" in err:
+        return None
+    raise RuntimeError((proc.stderr or "failed to read Keychain item").strip())
+
+
+def write_keychain_password(service: str, account: str, password: str) -> None:
+    if platform.system() != "Darwin" or not shutil.which("security"):
+        raise RuntimeError(
+            "encrypted DB keys require macOS Keychain via the 'security' command"
+        )
+    proc = subprocess.run(
+        [
+            "security",
+            "add-generic-password",
+            "-a",
+            account,
+            "-s",
+            service,
+            "-w",
+            password,
+            "-U",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or "failed to write Keychain item").strip())
+
+
+def get_db_encryption_key(create: bool = False) -> bytes:
+    raw = read_keychain_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+    if raw:
+        try:
+            key = base64.b64decode(raw.encode("ascii"), validate=True)
+        except Exception as e:
+            raise RuntimeError("Keychain encrypted DB key is not valid base64") from e
+        if len(key) != 32:
+            raise RuntimeError("Keychain encrypted DB key is not 32 bytes")
+        return key
+    if not create:
+        raise RuntimeError("encrypted DB key not found in Keychain; run init --encrypt")
+    key = os.urandom(32)
+    encoded = base64.b64encode(key).decode("ascii")
+    write_keychain_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, encoded)
+    return key
+
+
+def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with tmp.open("wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def cleanup_sqlite_file(path: Path) -> None:
+    for candidate in [path, *sqlite_sidecar_paths(path)]:
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def sqlite_connection_to_bytes(conn: sqlite3.Connection) -> bytes:
+    serialize = getattr(conn, "serialize", None)
+    if serialize is not None:
+        return serialize()
+
+    tmp = DB_PATH.with_name(f".{DB_PATH.name}.{os.getpid()}.serialize.db")
+    cleanup_sqlite_file(tmp)
+    try:
+        with sqlite3.connect(tmp) as dst:
+            conn.backup(dst)
+        return tmp.read_bytes()
+    finally:
+        cleanup_sqlite_file(tmp)
+
+
+def sqlite_bytes_to_connection(conn: sqlite3.Connection, data: bytes) -> None:
+    deserialize = getattr(conn, "deserialize", None)
+    if deserialize is not None:
+        deserialize(data)
+        return
+
+    tmp = DB_PATH.with_name(f".{DB_PATH.name}.{os.getpid()}.deserialize.db")
+    cleanup_sqlite_file(tmp)
+    try:
+        atomic_write_bytes(tmp, data)
+        with sqlite3.connect(tmp) as src:
+            src.backup(conn)
+    finally:
+        cleanup_sqlite_file(tmp)
+
+
+def acquire_encrypted_db_lock():
+    secure_db_dir()
+    lock_path = encrypted_db_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = lock_path.open("a+b")
+    try:
+        import fcntl
+
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    except ImportError:
+        pass
+    return lock
+
+
+class EncryptedDatabaseConnection(sqlite3.Connection):
+    def mfm_enable_encryption(self, path: Path, key: bytes, lock_handle) -> None:
+        self._mfm_encrypted_path = path
+        self._mfm_encryption_key = key
+        self._mfm_lock_handle = lock_handle
+        self._mfm_flushing = False
+
+    def mfm_flush_encrypted(self) -> None:
+        path = getattr(self, "_mfm_encrypted_path", None)
+        key = getattr(self, "_mfm_encryption_key", None)
+        if not path or key is None or getattr(self, "_mfm_flushing", False):
+            return
+        self._mfm_flushing = True
+        try:
+            encrypted = encrypt_db_bytes(sqlite_connection_to_bytes(self), key)
+            atomic_write_bytes(path, encrypted)
+            cleanup_db_sidecars()
+        finally:
+            self._mfm_flushing = False
+
+    def commit(self) -> None:
+        super().commit()
+        self.mfm_flush_encrypted()
+
+    def close(self) -> None:
+        lock_handle = getattr(self, "_mfm_lock_handle", None)
+        try:
+            if getattr(self, "_mfm_encrypted_path", None):
+                self.commit()
+        finally:
+            try:
+                super().close()
+            finally:
+                if lock_handle is not None:
+                    lock_handle.close()
+
+
+def connection_is_encrypted(conn: sqlite3.Connection) -> bool:
+    return bool(getattr(conn, "_mfm_encrypted_path", None))
+
+
+def configure_plain_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+def configure_encrypted_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+
+def connect_encrypted_db(create_key: bool = False) -> sqlite3.Connection:
+    secure_db_dir()
+    already_encrypted = is_encrypted_db_file(DB_PATH)
+    key = get_db_encryption_key(create=create_key and not already_encrypted)
+    lock_handle = acquire_encrypted_db_lock()
+    conn = sqlite3.connect(":memory:", factory=EncryptedDatabaseConnection)
+    try:
+        if DB_PATH.exists():
+            if already_encrypted:
+                plaintext = decrypt_db_bytes(DB_PATH.read_bytes(), key)
+                sqlite_bytes_to_connection(conn, plaintext)
+            else:
+                with sqlite3.connect(DB_PATH) as src:
+                    src.execute("PRAGMA wal_checkpoint(FULL);")
+                    src.backup(conn)
+        conn.mfm_enable_encryption(DB_PATH, key, lock_handle)
+        configure_encrypted_connection(conn)
+        if DB_PATH.exists() and not is_encrypted_db_file(DB_PATH):
+            conn.commit()
+        return conn
+    except Exception:
+        try:
+            if isinstance(conn, EncryptedDatabaseConnection):
+                conn._mfm_encrypted_path = None
+            conn.close()
+        finally:
+            lock_handle.close()
+        raise
+
+
+def connect_db(encrypt: bool = False) -> sqlite3.Connection:
+    secure_db_dir()
+    if encrypt or is_encrypted_db_file(DB_PATH):
+        return connect_encrypted_db(create_key=encrypt)
+    conn = sqlite3.connect(DB_PATH)
+    return configure_plain_connection(conn)
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -636,14 +936,12 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
 
     total_clips = int(base.get("count") or 0)
     first_row = conn.execute("SELECT MIN(created_at) AS first FROM clips").fetchone()
-    size_row = conn.execute(
-        """
+    size_row = conn.execute("""
         SELECT
             COALESCE(SUM(LENGTH(content)), 0) AS content_chars,
             COALESCE(AVG(LENGTH(content)), 0) AS avg_clip_chars
         FROM clips
-        """
-    ).fetchone()
+        """).fetchone()
     db_size_bytes = int(base.get("db_size_bytes") or 0)
     db_size_mb = round(db_size_bytes / (1024 * 1024), 3)
     max_db_mb = get_max_db_mb(conn, None)
@@ -694,18 +992,17 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
         ).fetchall()
     ]
     embedding_models = [
-        {"model": row["model"], "count": row["clip_count"]}
-        for row in conn.execute(
-            """
+        {"model": row["model"], "count": row["clip_count"]} for row in conn.execute("""
             SELECT model, COUNT(*) AS clip_count
             FROM clip_vectors
             GROUP BY model
             ORDER BY clip_count DESC, model ASC
-            """
-        ).fetchall()
+            """).fetchall()
     ]
     vector_count = sum(item["count"] for item in embedding_models)
-    vector_coverage = round((vector_count / total_clips) * 100, 1) if total_clips else 0.0
+    vector_coverage = (
+        round((vector_count / total_clips) * 100, 1) if total_clips else 0.0
+    )
 
     return {
         "total_clips": total_clips,
@@ -726,7 +1023,9 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
         "first_clip_at": first_row["first"] if first_row else None,
         "latest_clip_at": base.get("latest"),
         "content_chars": int(size_row["content_chars"] or 0) if size_row else 0,
-        "average_clip_chars": round(float(size_row["avg_clip_chars"] or 0), 1) if size_row else 0.0,
+        "average_clip_chars": (
+            round(float(size_row["avg_clip_chars"] or 0), 1) if size_row else 0.0
+        ),
         "storage": {
             "db_size_bytes": db_size_bytes,
             "db_size_mb": db_size_mb,
@@ -774,6 +1073,7 @@ def status_snapshot(conn: sqlite3.Connection) -> dict:
         "blocklist_size": len(get_blocklist(conn)),
         "sync_target": get_setting(conn, "sync_target", ""),
         "sync_interval": get_sync_interval(conn),
+        "db_encrypted": connection_is_encrypted(conn) or is_encrypted_db_file(DB_PATH),
         "usage": usage,
     }
 
@@ -794,7 +1094,7 @@ def write_db_snapshot(
     """Write a consistent SQLite snapshot to dest, including committed WAL pages."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     owned_conn = source_conn is None
-    src = source_conn or sqlite3.connect(DB_PATH)
+    src = source_conn or connect_db()
     try:
         src.commit()
         with sqlite3.connect(dest) as dst:
@@ -821,11 +1121,32 @@ def sync_pull(target: str) -> tuple[bool, str]:
     src = resolve_sync_target(target)
     if not src.exists():
         return False, f"source not found: {src}"
+    was_encrypted = is_encrypted_db_file(DB_PATH)
+    backup = None
     if DB_PATH.exists():
         backup = DB_PATH.with_suffix(".bak")
         shutil.copy2(DB_PATH, backup)
     DB_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, DB_PATH)
+    if was_encrypted and not is_encrypted_db_file(DB_PATH):
+        try:
+            conn = connect_db(encrypt=True)
+            try:
+                init_db(conn)
+            finally:
+                conn.close()
+        except Exception as e:
+            if backup and backup.exists():
+                shutil.copy2(backup, DB_PATH)
+            else:
+                try:
+                    DB_PATH.unlink()
+                except FileNotFoundError:
+                    pass
+            return (
+                False,
+                f"pull failed: re-encrypt failed; restored previous encrypted DB ({e})",
+            )
     return True, f"pulled db from {src}"
 
 
@@ -941,7 +1262,10 @@ def set_pro_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
 
 
 def get_upgrade_url(conn: sqlite3.Connection) -> str:
-    return get_setting(conn, "upgrade_url", DEFAULT_UPGRADE_URL).strip() or DEFAULT_UPGRADE_URL
+    return (
+        get_setting(conn, "upgrade_url", DEFAULT_UPGRADE_URL).strip()
+        or DEFAULT_UPGRADE_URL
+    )
 
 
 def license_snapshot(conn: sqlite3.Connection) -> dict:
@@ -950,7 +1274,9 @@ def license_snapshot(conn: sqlite3.Connection) -> dict:
     return {
         "pro_enabled": enabled,
         "license_type": "pro" if enabled else "free",
-        "license_status": get_setting(conn, "license_status", "active" if enabled else "inactive"),
+        "license_status": get_setting(
+            conn, "license_status", "active" if enabled else "inactive"
+        ),
         "license_key": mask_secret(key),
         "has_license_key": bool(key),
         "email": get_setting(conn, "gumroad_email", ""),
@@ -962,13 +1288,17 @@ def license_snapshot(conn: sqlite3.Connection) -> dict:
 def pro_required(feature: str, conn: sqlite3.Connection) -> tuple[bool, str]:
     if is_pro_enabled(conn):
         return True, ""
-    return False, f"{feature} requires Pro. Activate with `config --set license_key YOUR_KEY`."
+    return (
+        False,
+        f"{feature} requires Pro. Activate with `config --set license_key YOUR_KEY`.",
+    )
 
 
 def gumroad_webhook_secret(conn: sqlite3.Connection) -> str:
-    return os.environ.get("GUMROAD_WEBHOOK_SECRET", "").strip() or get_setting(
-        conn, "gumroad_webhook_secret", ""
-    ).strip()
+    return (
+        os.environ.get("GUMROAD_WEBHOOK_SECRET", "").strip()
+        or get_setting(conn, "gumroad_webhook_secret", "").strip()
+    )
 
 
 SETTINGS_SPEC: dict[str, tuple[str, object]] = {
@@ -1164,7 +1494,10 @@ def require_premium(conn: sqlite3.Connection, feature: str = "") -> bool:
     if has_premium(conn):
         return True
     feature_note = f" ({feature})" if feature else ""
-    say(MOTHER, f"premium feature required{feature_note}. Use `license --activate KEY` or buy at {LEMON_SQUEEZY_CHECKOUT_URL}")
+    say(
+        MOTHER,
+        f"premium feature required{feature_note}. Use `license --activate KEY` or buy at {LEMON_SQUEEZY_CHECKOUT_URL}",
+    )
     return False
 
 
@@ -1853,10 +2186,13 @@ def read_text_file(path: Path) -> Optional[str]:
 
 
 # ---------- Commands ----------
-def cmd_init(_: argparse.Namespace) -> None:
-    conn = connect_db()
+def cmd_init(args: argparse.Namespace) -> None:
+    conn = connect_db(encrypt=getattr(args, "encrypt", False))
     init_db(conn)
-    say(MOTHER, f"initialized DB at {DB_PATH}")
+    if connection_is_encrypted(conn):
+        say(MOTHER, f"initialized encrypted DB at {DB_PATH}")
+    else:
+        say(MOTHER, f"initialized DB at {DB_PATH}")
 
 
 def auto_context_flags(level: str) -> tuple[bool, bool]:
@@ -2391,7 +2727,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         FATHER,
         f"capture={'paused' if snap['paused'] else 'active'}, notify={snap['notify']}, allow_secrets={snap['allow_secrets']}, embedder={snap['embedder']}, "
         f"ltm={snap['ltm_enabled']}, ml_context={snap['ml_context_level']}, ml_mode={snap['ml_processing_mode']}, "
-        f"max_bytes={snap['max_bytes']}, max_db_mb={snap['max_db_mb']}, evict_mode={snap['evict_mode']}, clips={snap['count']}, latest={latest}, db={snap['db_size_mb']:.2f} MB, blocklisted_apps={snap['blocklist_size']}, cap_by_app={snap['cap_by_app']}, cap_by_tag={snap['cap_by_tag']}",
+        f"max_bytes={snap['max_bytes']}, max_db_mb={snap['max_db_mb']}, evict_mode={snap['evict_mode']}, clips={snap['count']}, latest={latest}, db={snap['db_size_mb']:.2f} MB, encrypted={snap['db_encrypted']}, blocklisted_apps={snap['blocklist_size']}, cap_by_app={snap['cap_by_app']}, cap_by_tag={snap['cap_by_tag']}",
     )
 
 
@@ -3321,12 +3657,32 @@ def cmd_restore(args: argparse.Namespace) -> None:
     try:
         import shutil
 
+        was_encrypted = is_encrypted_db_file(DB_PATH)
+        backup = None
         if DB_PATH.exists():
             backup = DB_PATH.with_suffix(".bak")
             shutil.copy2(DB_PATH, backup)
             say(FATHER, f"existing DB backed up to {backup}")
         DB_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, DB_PATH)
+        if was_encrypted and not is_encrypted_db_file(DB_PATH):
+            try:
+                conn = connect_db(encrypt=True)
+                try:
+                    init_db(conn)
+                finally:
+                    conn.close()
+            except Exception as e:
+                if backup and backup.exists():
+                    shutil.copy2(backup, DB_PATH)
+                else:
+                    try:
+                        DB_PATH.unlink()
+                    except FileNotFoundError:
+                        pass
+                raise RuntimeError(
+                    f"re-encrypt failed; restored previous encrypted DB ({e})"
+                ) from e
         say(FATHER, f"restored DB from {src}")
     except Exception as e:
         say(FATHER, f"restore failed: {e}")
@@ -3375,8 +3731,9 @@ def snapshot_db_to(path: Path) -> None:
     Uses the SQLite online backup API so the snapshot is safe even while the
     watcher is writing (WAL mode).
     """
-    src = sqlite3.connect(str(DB_PATH))
+    src = connect_db()
     try:
+        src.commit()
         dst = sqlite3.connect(str(path))
         try:
             src.backup(dst)
@@ -5411,6 +5768,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="initialize the database")
+    p_init.add_argument(
+        "--encrypt",
+        action="store_true",
+        help="store mfm.db encrypted with an AES-256-GCM key in Keychain",
+    )
     p_init.set_defaults(func=cmd_init)
 
     p_watch = sub.add_parser("watch", help="start clipboard watcher")
