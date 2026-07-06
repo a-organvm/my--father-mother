@@ -111,6 +111,7 @@ Common status codes:
 | `204` | CORS preflight succeeded |
 | `400` | Invalid input or missing required field |
 | `401` | Gumroad webhook signature failed |
+| `402` | Requested Pro-only feature without an active license |
 | `404` | Endpoint or resource not found |
 | `503` | Gumroad webhook secret is not configured |
 | `500` | Insert failed unexpectedly |
@@ -183,16 +184,17 @@ bucketed by source application.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/` or `/ui` | Built-in web interface |
+| `GET` | `/`, `/ui`, or `/dashboard` | Built-in web interface |
 | `GET` | `/health` | Health check |
 | `GET` | `/stats` | Minimal counts and DB size |
 | `GET` | `/status` | Operational status and limits |
+| `GET` | `/usage` | Dashboard usage rollup |
 | `GET` | `/settings` | Customer settings snapshot |
 | `GET` | `/config` | Runtime config subset |
 | `POST` | `/config` | Update runtime config |
 | `GET` | `/recent` | Recent clips with filters |
 | `GET` | `/search` | SQLite FTS5 keyword search |
-| `GET` | `/semantic_search` | Semantic search or FTS fallback |
+| `GET` | `/semantic_search` | Hash similarity or Pro e5 semantic search |
 | `GET` | `/context` | LLM-ready context bundle |
 | `GET` | `/topics` | Recent clips grouped by tag/app |
 | `GET` | `/clip` | Fetch a single clip by ID |
@@ -252,7 +254,8 @@ Response:
 
 ### GET /status
 
-Returns operational settings, tier state, and local DB usage.
+Returns operational settings, tier state, local DB usage, and the dashboard
+usage rollup under `usage`.
 
 ```bash
 curl -s http://127.0.0.1:8765/status | python3 -m json.tool
@@ -283,8 +286,35 @@ Response fields include:
   "sync_interval": 60.0,
   "license_type": "pro",
   "device_count": 1,
-  "upgrade_url": "https://gumroad.com/l/my-father-mother-pro"
+  "upgrade_url": "https://gumroad.com/l/my-father-mother-pro",
+  "usage": {
+    "total_clips": 1284,
+    "pinned_clips": 43,
+    "tagged_clips": 210,
+    "note_count": 18,
+    "clips_last_24h": 37,
+    "clips_last_7d": 244,
+    "storage": {
+      "db_size_mb": 7.0,
+      "max_db_mb": 512,
+      "used_pct": 1.4
+    },
+    "vector_coverage_pct": 100.0,
+    "top_apps": [{"name": "Terminal", "count": 402, "latest": "2026-06-19T14:22:10.123456+00:00"}],
+    "top_tags": [{"name": "project", "count": 38, "latest": "2026-06-19T13:10:00+00:00"}],
+    "daily_counts": [{"day": "2026-06-19", "count": 37}]
+  }
 }
+```
+
+### GET /usage
+
+Returns the same dashboard usage rollup nested under `/status["usage"]`.
+Use this endpoint when a dashboard or widget needs metrics without the wider
+runtime configuration payload.
+
+```bash
+curl -s http://127.0.0.1:8765/usage | python3 -m json.tool
 ```
 
 ### GET /settings
@@ -345,8 +375,9 @@ Accepted fields:
 | `allow_secrets` | boolean | Allow payloads matching built-in secret patterns |
 | `notify` | boolean | macOS notification setting |
 | `max_db_mb` | integer | Local database size cap |
-| `pro_enabled` | boolean/string | Enables vector indexing/search behavior |
-| `embedder` | string | `hash` or `e5-small` |
+| `pro_enabled` | boolean/string | Local Pro feature state |
+| `license_key` | string | Alias for storing a customer Pro license key |
+| `embedder` | string | `hash` or Pro-only `e5-small` |
 | `cap_by_app` | object | App-specific clip caps, keys normalized to lowercase |
 | `cap_by_tag` | object | Tag-specific clip caps, keys normalized to lowercase |
 | `evict_mode` | string | `fifo` or `tiered` |
@@ -477,9 +508,9 @@ Response:
 
 ### GET /semantic_search
 
-Returns semantically related clips when Pro/vector indexing is enabled. When
-`pro_enabled` is false, this endpoint falls back to FTS search and omits
-`score`.
+Returns similarity-ranked clips. Hash similarity is available on Free. The
+`e5-small` embedder is Pro-only; requesting it without an active license returns
+`402` with an `upgrade_url`.
 
 Query parameters:
 
@@ -1260,9 +1291,9 @@ curl -s \
 - Retrieval endpoints return full clip content. Use filters and `limit` to keep
   responses small.
 - `semantic_search` only scores clips that already have vectors for the selected
-  embedder. Clips created while `pro_enabled` was false do not have vectors;
-  only clips ingested after enabling Pro/vector settings are scored unless you
-  re-ingest the older content.
+  embedder. Free hash vectors are created by default. e5 vectors are created
+  only for clips ingested after enabling Pro and `embedder=e5-small`, unless you
+  re-ingest older content.
 - Ingest endpoints enforce `max_bytes` and secret detection. Increase
   `max_bytes` or enable `allow_secrets` only when the local security tradeoff is
   acceptable.
