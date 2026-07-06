@@ -630,9 +630,12 @@ class TestCopilotChats:
         cleared = mfm.clear_copilot_chats(conn)
         assert cleared == 2
         assert mfm.copilot_chat_count(conn) == 0
+
+
 # ──────────────────────────────────────────────
 # filtered_rows — FTS5 search and filters
 # ──────────────────────────────────────────────
+
 
 class TestFilteredRows:
     def test_no_filters(self, populated_db):
@@ -673,15 +676,23 @@ class TestFilteredRows:
         assert len(rows) == 1
 
     def test_filter_by_since_iso(self, populated_db):
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, since_iso="2026-01-16T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, since_iso="2026-01-16T00:00:00"
+        )
         assert len(rows) == 0
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, since_iso="2026-01-14T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, since_iso="2026-01-14T00:00:00"
+        )
         assert len(rows) == 3
 
     def test_filter_by_until_iso(self, populated_db):
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, until_iso="2026-01-14T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, until_iso="2026-01-14T00:00:00"
+        )
         assert len(rows) == 0
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, until_iso="2026-01-16T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, until_iso="2026-01-16T00:00:00"
+        )
         assert len(rows) == 3
 
     def test_combined_filters(self, populated_db):
@@ -691,7 +702,9 @@ class TestFilteredRows:
         assert len(rows) == 1
 
     def test_returns_tag_map(self, populated_db):
-        cids = [r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()]
+        cids = [
+            r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()
+        ]
         mfm.assign_tag(populated_db, cids[0], "alpha")
         mfm.assign_tag(populated_db, cids[1], "beta")
         rows, tag_map = mfm.filtered_rows(populated_db, limit=10)
@@ -702,6 +715,7 @@ class TestFilteredRows:
 # ──────────────────────────────────────────────
 # Eviction — per-app, per-tag, tiered
 # ──────────────────────────────────────────────
+
 
 class TestEvictAppCap:
     def test_noop_when_under_cap(self, conn):
@@ -789,6 +803,7 @@ class TestEvictIfNeeded:
 # Fetch and Context
 # ──────────────────────────────────────────────
 
+
 class TestFetchClip:
     def test_fetch_existing(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
@@ -812,7 +827,9 @@ class TestLatestClip:
 
 class TestContextBundle:
     def test_returns_dicts(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None
+        )
         assert len(bundle) == 3
         assert isinstance(bundle[0], dict)
         assert "id" in bundle[0]
@@ -822,24 +839,32 @@ class TestContextBundle:
         assert "pinned" in bundle[0]
 
     def test_filters_by_app(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app="Terminal", tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app="Terminal", tag=None, limit=10, hours=None
+        )
         assert len(bundle) == 1
         assert bundle[0]["source_app"] == "Terminal"
 
     def test_filters_by_tag(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         mfm.assign_tag(populated_db, cid, "urgent")
-        bundle = mfm.context_bundle(populated_db, app=None, tag="urgent", limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag="urgent", limit=10, hours=None
+        )
         assert len(bundle) == 1
 
     def test_respects_limit(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=2, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=2, hours=None
+        )
         assert len(bundle) == 2
 
     def test_includes_notes(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         mfm.add_note(populated_db, cid, "important note")
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None
+        )
         clip_with_note = [b for b in bundle if b["id"] == cid][0]
         assert len(clip_with_note["notes"]) == 1
 
@@ -847,13 +872,16 @@ class TestContextBundle:
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 1 WHERE id = ?", (cid,))
         populated_db.commit()
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None, pins_only=True)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None, pins_only=True
+        )
         assert len(bundle) == 1
 
 
 # ──────────────────────────────────────────────
 # Export / Import
 # ──────────────────────────────────────────────
+
 
 class TestExportItems:
     def test_exports_all(self, populated_db):
@@ -875,8 +903,18 @@ class TestExportItems:
 
 class TestInsertClipImport:
     def test_imports_new_clip(self, conn):
-        cid = mfm.insert_clip_import(conn, "imported content", "App", "Win",
-                                       "2026-06-01T00:00:00+00:00", False, "My Title", None, "en", None)
+        cid = mfm.insert_clip_import(
+            conn,
+            "imported content",
+            "App",
+            "Win",
+            "2026-06-01T00:00:00+00:00",
+            False,
+            "My Title",
+            None,
+            "en",
+            None,
+        )
         assert cid is not None
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
         assert row["title"] == "My Title"
@@ -884,23 +922,36 @@ class TestInsertClipImport:
         assert row["pinned"] == 0
 
     def test_rejects_empty(self, conn):
-        assert mfm.insert_clip_import(conn, "", "App", "Win", None, False, None, None, None, None) is None
+        assert (
+            mfm.insert_clip_import(
+                conn, "", "App", "Win", None, False, None, None, None, None
+            )
+            is None
+        )
 
     def test_deduplicates(self, conn):
-        cid1 = mfm.insert_clip_import(conn, "dedup me", "App", "Win", None, False, None, None, None, None)
-        cid2 = mfm.insert_clip_import(conn, "dedup me", "App", "Win", None, False, None, None, None, None)
+        cid1 = mfm.insert_clip_import(
+            conn, "dedup me", "App", "Win", None, False, None, None, None, None
+        )
+        cid2 = mfm.insert_clip_import(
+            conn, "dedup me", "App", "Win", None, False, None, None, None, None
+        )
         assert cid1 is not None
         assert cid2 == cid1
 
     def test_imports_pinned(self, conn):
-        cid = mfm.insert_clip_import(conn, "pinned clip", "App", "Win", None, True, None, None, None, None)
+        cid = mfm.insert_clip_import(
+            conn, "pinned clip", "App", "Win", None, True, None, None, None, None
+        )
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
         assert row["pinned"] == 1
 
 
 class TestIngestText:
     def test_ingests_with_tags(self, conn):
-        cid = mfm.ingest_text(conn, "tagged clip", "App", "Win", tags=["work", "urgent"])
+        cid = mfm.ingest_text(
+            conn, "tagged clip", "App", "Win", tags=["work", "urgent"]
+        )
         assert cid is not None
         tags = mfm.tags_for_clip(conn, cid)
         assert "work" in tags
@@ -917,8 +968,16 @@ class TestIngestText:
 class TestImportClips:
     def test_imports_multiple(self, conn):
         items = [
-            {"content": "first", "source_app": "App", "created_at": "2026-01-01T00:00:00+00:00"},
-            {"content": "second", "source_app": "App", "created_at": "2026-01-02T00:00:00+00:00"},
+            {
+                "content": "first",
+                "source_app": "App",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "content": "second",
+                "source_app": "App",
+                "created_at": "2026-01-02T00:00:00+00:00",
+            },
         ]
         result = mfm.import_clips(conn, items)
         assert result["inserted"] == 2
@@ -941,6 +1000,7 @@ class TestImportClips:
 # ──────────────────────────────────────────────
 # Settings — typed, snapshot, formatting
 # ──────────────────────────────────────────────
+
 
 class TestGetSettingTyped:
     def test_unknown_key_falls_back_to_raw(self, conn):
@@ -1035,6 +1095,7 @@ class TestSettingsSnapshot:
 # Cap maps
 # ──────────────────────────────────────────────
 
+
 class TestCapMaps:
     def test_get_empty(self, conn):
         assert mfm.get_cap_map(conn, "cap_by_app") == {}
@@ -1058,6 +1119,7 @@ class TestCapMaps:
 # ──────────────────────────────────────────────
 # Allow PDF / Images
 # ──────────────────────────────────────────────
+
 
 class TestAllowPdf:
     def test_default(self, conn):
@@ -1091,6 +1153,7 @@ class TestAllowImages:
 # Build ANN Index
 # ──────────────────────────────────────────────
 
+
 class TestBuildAnnIndex:
     def test_empty(self, conn):
         rows = conn.execute("SELECT * FROM clip_vectors").fetchall()
@@ -1119,6 +1182,7 @@ class TestBuildAnnIndex:
 # Topic groups
 # ──────────────────────────────────────────────
 
+
 class TestTopicGroups:
     def test_groups_by_app_when_untagged(self, populated_db):
         groups = mfm.topic_groups(populated_db, limit_groups=5, per_group=5)
@@ -1127,7 +1191,9 @@ class TestTopicGroups:
         assert "Terminal" in app_names or "terminal" in app_names
 
     def test_groups_by_tag_when_tagged(self, populated_db):
-        cids = [r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()]
+        cids = [
+            r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()
+        ]
         mfm.assign_tag(populated_db, cids[0], "project-x")
         groups = mfm.topic_groups(populated_db, limit_groups=5, per_group=5)
         group_names = {g["name"] for g in groups}
@@ -1142,6 +1208,7 @@ class TestTopicGroups:
 # Markdown Outline Export
 # ──────────────────────────────────────────────
 
+
 class TestBuildMarkdownOutline:
     def test_empty(self, conn):
         md, count = mfm.build_markdown_outline(conn, since_iso=None)
@@ -1154,9 +1221,13 @@ class TestBuildMarkdownOutline:
         assert "hello world" in md or "def main()" in md
 
     def test_with_since_filter(self, populated_db):
-        md, count = mfm.build_markdown_outline(populated_db, since_iso="2026-01-20T00:00:00")
+        md, count = mfm.build_markdown_outline(
+            populated_db, since_iso="2026-01-20T00:00:00"
+        )
         assert count == 0
-        md, count = mfm.build_markdown_outline(populated_db, since_iso="2026-01-14T00:00:00")
+        md, count = mfm.build_markdown_outline(
+            populated_db, since_iso="2026-01-14T00:00:00"
+        )
         assert count == 3
 
     def test_includes_tags(self, populated_db):
@@ -1170,6 +1241,7 @@ class TestBuildMarkdownOutline:
 # Language Detection
 # ──────────────────────────────────────────────
 
+
 class TestDetectLanguage:
     def test_fallback_when_langdetect_missing(self):
         lang = mfm.detect_language("Hello world")
@@ -1179,6 +1251,7 @@ class TestDetectLanguage:
 # ──────────────────────────────────────────────
 # Status Snapshot
 # ──────────────────────────────────────────────
+
 
 class TestStatusSnapshot:
     def test_returns_dict(self, conn):
@@ -1244,6 +1317,7 @@ class TestUsageSnapshot:
 # Helper utilities
 # ──────────────────────────────────────────────
 
+
 class TestReadTextFile:
     def test_reads_existing(self, tmp_path):
         f = tmp_path / "test.txt"
@@ -1272,25 +1346,31 @@ class TestCopyToClipboard:
 # Pin / Unpin
 # ──────────────────────────────────────────────
 
+
 class TestPin:
     def test_pin_clip(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 1 WHERE id = ?", (cid,))
         populated_db.commit()
-        row = populated_db.execute("SELECT pinned FROM clips WHERE id = ?", (cid,)).fetchone()
+        row = populated_db.execute(
+            "SELECT pinned FROM clips WHERE id = ?", (cid,)
+        ).fetchone()
         assert row["pinned"] == 1
 
     def test_unpin_clip(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 0 WHERE id = ?", (cid,))
         populated_db.commit()
-        row = populated_db.execute("SELECT pinned FROM clips WHERE id = ?", (cid,)).fetchone()
+        row = populated_db.execute(
+            "SELECT pinned FROM clips WHERE id = ?", (cid,)
+        ).fetchone()
         assert row["pinned"] == 0
 
 
 # ──────────────────────────────────────────────
 # Sync — get_sync_interval, write_db_snapshot
 # ──────────────────────────────────────────────
+
 
 class TestGetSyncInterval:
     def test_default(self, conn):
@@ -1333,6 +1413,7 @@ class TestWriteDbSnapshot:
 # Federation helpers
 # ──────────────────────────────────────────────
 
+
 class TestFederateHelpers:
     def test_cmd_federate_export_in_memory(self, conn):
         mfm.insert_clip(conn, "federated clip", "App", "Win")
@@ -1342,7 +1423,11 @@ class TestFederateHelpers:
 
     def test_cmd_federate_import_in_memory(self, conn):
         items = [
-            {"content": "from peer", "source_app": "PeerApp", "created_at": "2026-06-01T00:00:00+00:00"},
+            {
+                "content": "from peer",
+                "source_app": "PeerApp",
+                "created_at": "2026-06-01T00:00:00+00:00",
+            },
         ]
         result = mfm.import_clips(conn, items)
         assert result["inserted"] == 1
@@ -1351,6 +1436,7 @@ class TestFederateHelpers:
 # ──────────────────────────────────────────────
 # Mask Secret
 # ──────────────────────────────────────────────
+
 
 class TestMaskSecret:
     def test_empty(self):
@@ -1382,6 +1468,7 @@ class TestLicenseKeySummary:
 # ──────────────────────────────────────────────
 # Premium / Pro helpers
 # ──────────────────────────────────────────────
+
 
 class TestProRequired:
     def test_returns_true_when_pro_enabled(self, conn):
@@ -1421,6 +1508,7 @@ class TestRequirePremium:
 # ──────────────────────────────────────────────
 # Auto Context Flags
 # ──────────────────────────────────────────────
+
 
 class TestAutoContextFlags:
     def test_off_returns_false_false(self):
@@ -1464,6 +1552,7 @@ class TestAutoContextFlags:
 # ──────────────────────────────────────────────
 # S3 Backup helpers
 # ──────────────────────────────────────────────
+
 
 class TestParseS3Bucket:
     def test_plain_bucket(self):
@@ -1516,6 +1605,7 @@ class TestParseS3Bucket:
 # Gumroad Webhook Secret
 # ──────────────────────────────────────────────
 
+
 class TestGumroadWebhookSecret:
     def test_from_env(self, conn, monkeypatch):
         monkeypatch.setenv("GUMROAD_WEBHOOK_SECRET", "env-secret")
@@ -1540,6 +1630,7 @@ class TestGumroadWebhookSecret:
 # Upgrade URL
 # ──────────────────────────────────────────────
 
+
 class TestGetUpgradeUrl:
     def test_default(self, conn):
         assert mfm.get_upgrade_url(conn) == mfm.DEFAULT_UPGRADE_URL
@@ -1557,10 +1648,14 @@ class TestGetUpgradeUrl:
 # File / Image / Transcript ingestion
 # ──────────────────────────────────────────────
 
+
 class TestIngestFileAtPath:
     def test_nonexistent_path(self, conn, tmp_path):
         result = mfm.ingest_file_at_path(
-            conn, tmp_path / "nope.txt", max_bytes=99999, allow_secrets=False,
+            conn,
+            tmp_path / "nope.txt",
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1568,7 +1663,10 @@ class TestIngestFileAtPath:
         f = tmp_path / "doc.bin"
         f.write_text("binary content")
         result = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1576,7 +1674,10 @@ class TestIngestFileAtPath:
         f = tmp_path / "large.txt"
         f.write_text("small text")
         result = mfm.ingest_file_at_path(
-            conn, f, max_bytes=4, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=4,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1584,7 +1685,10 @@ class TestIngestFileAtPath:
         f = tmp_path / "notes.md"
         f.write_text("hello from ingested file")
         cid = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert cid is not None
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
@@ -1596,10 +1700,16 @@ class TestIngestFileAtPath:
         f = tmp_path / "repeat.txt"
         f.write_text("duplicate content")
         cid1 = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         cid2 = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert cid1 is not None
         assert cid2 == cid1
@@ -1608,7 +1718,10 @@ class TestIngestFileAtPath:
         f = tmp_path / "doc.pdf"
         f.write_text("PDF content (fake)")
         result = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1616,7 +1729,10 @@ class TestIngestFileAtPath:
         f = tmp_path / "tagged.txt"
         f.write_text("tagged file content")
         cid = mfm.ingest_file_at_path(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
             tags=["work", "inbox"],
         )
         assert cid is not None
@@ -1628,7 +1744,10 @@ class TestIngestFileAtPath:
 class TestIngestImageWithOcr:
     def test_nonexistent(self, conn, tmp_path):
         result = mfm.ingest_image_with_ocr(
-            conn, tmp_path / "nope.png", max_bytes=99999, allow_secrets=False,
+            conn,
+            tmp_path / "nope.png",
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1637,7 +1756,10 @@ class TestIngestImageWithOcr:
         f = tmp_path / "img.png"
         f.write_text("fake image")
         result = mfm.ingest_image_with_ocr(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1646,7 +1768,10 @@ class TestIngestImageWithOcr:
         f = tmp_path / "img.png"
         f.write_text("fake image")
         result = mfm.ingest_image_with_ocr(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1655,7 +1780,10 @@ class TestIngestImageWithOcr:
         f = tmp_path / "img.png"
         f.write_text("tiny")
         result = mfm.ingest_image_with_ocr(
-            conn, f, max_bytes=2, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=2,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1663,7 +1791,10 @@ class TestIngestImageWithOcr:
 class TestIngestTranscript:
     def test_nonexistent(self, conn, tmp_path):
         result = mfm.ingest_transcript(
-            conn, tmp_path / "nope.txt", max_bytes=99999, allow_secrets=False,
+            conn,
+            tmp_path / "nope.txt",
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert result is None
 
@@ -1671,7 +1802,10 @@ class TestIngestTranscript:
         f = tmp_path / "meeting.txt"
         f.write_text("discussed project timeline")
         cid = mfm.ingest_transcript(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert cid is not None
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
@@ -1685,10 +1819,16 @@ class TestIngestTranscript:
         f = tmp_path / "transcript.txt"
         f.write_text("duplicate transcript")
         cid1 = mfm.ingest_transcript(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         cid2 = mfm.ingest_transcript(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert cid1 is not None
         assert cid2 == cid1
@@ -1697,7 +1837,10 @@ class TestIngestTranscript:
         f = tmp_path / "large.txt"
         f.write_text("small")
         cid = mfm.ingest_transcript(
-            conn, f, max_bytes=2, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=2,
+            allow_secrets=False,
         )
         assert cid is None
 
@@ -1705,6 +1848,9 @@ class TestIngestTranscript:
         f = tmp_path / "empty.txt"
         f.write_text("")
         cid = mfm.ingest_transcript(
-            conn, f, max_bytes=99999, allow_secrets=False,
+            conn,
+            f,
+            max_bytes=99999,
+            allow_secrets=False,
         )
         assert cid is None

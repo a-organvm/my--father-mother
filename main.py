@@ -49,9 +49,7 @@ DEFAULT_UI_METRICS = "default"
 DEFAULT_UI_TOOLBAR = "suggested"
 DEFAULT_PERSONAL_CLOUD_STATUS = "disconnected"
 
-LEMON_SQUEEZY_CHECKOUT_URL = (
-    "https://my-father-mother.lemonsqueezy.com/checkout/buy/"
-)
+LEMON_SQUEEZY_CHECKOUT_URL = "https://my-father-mother.lemonsqueezy.com/checkout/buy/"
 DEFAULT_UPGRADE_URL = "https://gumroad.com/l/my-father-mother-pro"
 
 DEFAULT_MAX_BYTES = 16_384  # ~16 KB
@@ -636,14 +634,12 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
 
     total_clips = int(base.get("count") or 0)
     first_row = conn.execute("SELECT MIN(created_at) AS first FROM clips").fetchone()
-    size_row = conn.execute(
-        """
+    size_row = conn.execute("""
         SELECT
             COALESCE(SUM(LENGTH(content)), 0) AS content_chars,
             COALESCE(AVG(LENGTH(content)), 0) AS avg_clip_chars
         FROM clips
-        """
-    ).fetchone()
+        """).fetchone()
     db_size_bytes = int(base.get("db_size_bytes") or 0)
     db_size_mb = round(db_size_bytes / (1024 * 1024), 3)
     max_db_mb = get_max_db_mb(conn, None)
@@ -694,18 +690,17 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
         ).fetchall()
     ]
     embedding_models = [
-        {"model": row["model"], "count": row["clip_count"]}
-        for row in conn.execute(
-            """
+        {"model": row["model"], "count": row["clip_count"]} for row in conn.execute("""
             SELECT model, COUNT(*) AS clip_count
             FROM clip_vectors
             GROUP BY model
             ORDER BY clip_count DESC, model ASC
-            """
-        ).fetchall()
+            """).fetchall()
     ]
     vector_count = sum(item["count"] for item in embedding_models)
-    vector_coverage = round((vector_count / total_clips) * 100, 1) if total_clips else 0.0
+    vector_coverage = (
+        round((vector_count / total_clips) * 100, 1) if total_clips else 0.0
+    )
 
     return {
         "total_clips": total_clips,
@@ -726,7 +721,9 @@ def usage_snapshot(conn: sqlite3.Connection, top_limit: int = 5, days: int = 7) 
         "first_clip_at": first_row["first"] if first_row else None,
         "latest_clip_at": base.get("latest"),
         "content_chars": int(size_row["content_chars"] or 0) if size_row else 0,
-        "average_clip_chars": round(float(size_row["avg_clip_chars"] or 0), 1) if size_row else 0.0,
+        "average_clip_chars": (
+            round(float(size_row["avg_clip_chars"] or 0), 1) if size_row else 0.0
+        ),
         "storage": {
             "db_size_bytes": db_size_bytes,
             "db_size_mb": db_size_mb,
@@ -941,7 +938,10 @@ def set_pro_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
 
 
 def get_upgrade_url(conn: sqlite3.Connection) -> str:
-    return get_setting(conn, "upgrade_url", DEFAULT_UPGRADE_URL).strip() or DEFAULT_UPGRADE_URL
+    return (
+        get_setting(conn, "upgrade_url", DEFAULT_UPGRADE_URL).strip()
+        or DEFAULT_UPGRADE_URL
+    )
 
 
 def license_snapshot(conn: sqlite3.Connection) -> dict:
@@ -950,7 +950,9 @@ def license_snapshot(conn: sqlite3.Connection) -> dict:
     return {
         "pro_enabled": enabled,
         "license_type": "pro" if enabled else "free",
-        "license_status": get_setting(conn, "license_status", "active" if enabled else "inactive"),
+        "license_status": get_setting(
+            conn, "license_status", "active" if enabled else "inactive"
+        ),
         "license_key": mask_secret(key),
         "has_license_key": bool(key),
         "email": get_setting(conn, "gumroad_email", ""),
@@ -962,13 +964,17 @@ def license_snapshot(conn: sqlite3.Connection) -> dict:
 def pro_required(feature: str, conn: sqlite3.Connection) -> tuple[bool, str]:
     if is_pro_enabled(conn):
         return True, ""
-    return False, f"{feature} requires Pro. Activate with `config --set license_key YOUR_KEY`."
+    return (
+        False,
+        f"{feature} requires Pro. Activate with `config --set license_key YOUR_KEY`.",
+    )
 
 
 def gumroad_webhook_secret(conn: sqlite3.Connection) -> str:
-    return os.environ.get("GUMROAD_WEBHOOK_SECRET", "").strip() or get_setting(
-        conn, "gumroad_webhook_secret", ""
-    ).strip()
+    return (
+        os.environ.get("GUMROAD_WEBHOOK_SECRET", "").strip()
+        or get_setting(conn, "gumroad_webhook_secret", "").strip()
+    )
 
 
 SETTINGS_SPEC: dict[str, tuple[str, object]] = {
@@ -1164,7 +1170,10 @@ def require_premium(conn: sqlite3.Connection, feature: str = "") -> bool:
     if has_premium(conn):
         return True
     feature_note = f" ({feature})" if feature else ""
-    say(MOTHER, f"premium feature required{feature_note}. Use `license --activate KEY` or buy at {LEMON_SQUEEZY_CHECKOUT_URL}")
+    say(
+        MOTHER,
+        f"premium feature required{feature_note}. Use `license --activate KEY` or buy at {LEMON_SQUEEZY_CHECKOUT_URL}",
+    )
     return False
 
 
