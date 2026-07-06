@@ -152,7 +152,11 @@ def encrypted_db_lock_path() -> Path:
 
 
 def encrypted_db_sidecar_paths() -> list[Path]:
-    base = str(DB_PATH)
+    return sqlite_sidecar_paths(DB_PATH)
+
+
+def sqlite_sidecar_paths(path: Path) -> list[Path]:
+    base = str(path)
     return [Path(f"{base}-wal"), Path(f"{base}-shm"), Path(f"{base}-journal")]
 
 
@@ -302,6 +306,47 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
             pass
 
 
+def cleanup_sqlite_file(path: Path) -> None:
+    for candidate in [path, *sqlite_sidecar_paths(path)]:
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def sqlite_connection_to_bytes(conn: sqlite3.Connection) -> bytes:
+    serialize = getattr(conn, "serialize", None)
+    if serialize is not None:
+        return serialize()
+
+    tmp = DB_PATH.with_name(f".{DB_PATH.name}.{os.getpid()}.serialize.db")
+    cleanup_sqlite_file(tmp)
+    try:
+        with sqlite3.connect(tmp) as dst:
+            conn.backup(dst)
+        return tmp.read_bytes()
+    finally:
+        cleanup_sqlite_file(tmp)
+
+
+def sqlite_bytes_to_connection(conn: sqlite3.Connection, data: bytes) -> None:
+    deserialize = getattr(conn, "deserialize", None)
+    if deserialize is not None:
+        deserialize(data)
+        return
+
+    tmp = DB_PATH.with_name(f".{DB_PATH.name}.{os.getpid()}.deserialize.db")
+    cleanup_sqlite_file(tmp)
+    try:
+        atomic_write_bytes(tmp, data)
+        with sqlite3.connect(tmp) as src:
+            src.backup(conn)
+    finally:
+        cleanup_sqlite_file(tmp)
+
+
 def acquire_encrypted_db_lock():
     secure_db_dir()
     lock_path = encrypted_db_lock_path()
@@ -330,7 +375,7 @@ class EncryptedDatabaseConnection(sqlite3.Connection):
             return
         self._mfm_flushing = True
         try:
-            encrypted = encrypt_db_bytes(self.serialize(), key)
+            encrypted = encrypt_db_bytes(sqlite_connection_to_bytes(self), key)
             atomic_write_bytes(path, encrypted)
             cleanup_db_sidecars()
         finally:
@@ -380,7 +425,7 @@ def connect_encrypted_db(create_key: bool = False) -> sqlite3.Connection:
         if DB_PATH.exists():
             if already_encrypted:
                 plaintext = decrypt_db_bytes(DB_PATH.read_bytes(), key)
-                conn.deserialize(plaintext)
+                sqlite_bytes_to_connection(conn, plaintext)
             else:
                 with sqlite3.connect(DB_PATH) as src:
                     src.execute("PRAGMA wal_checkpoint(FULL);")
