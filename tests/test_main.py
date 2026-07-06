@@ -8,16 +8,19 @@ from datetime import datetime, timezone, timedelta
 
 import main as mfm
 
-
 # ──────────────────────────────────────────────
 # Database + Schema
 # ──────────────────────────────────────────────
 
+
 class TestInitDb:
     def test_creates_tables(self, conn):
-        tables = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()}
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
         assert "clips" in tables
         assert "clips_fts" in tables
         assert "settings" in tables
@@ -57,6 +60,7 @@ class TestColumnExists:
 # Clip CRUD
 # ──────────────────────────────────────────────
 
+
 class TestClipExists:
     def test_missing(self, conn):
         assert mfm.clip_exists(conn, "deadbeef") is False
@@ -95,7 +99,9 @@ class TestInsertClip:
 
     def test_stores_embedding(self, conn):
         cid = mfm.insert_clip(conn, "embedding test", "App", "Win")
-        vec_row = conn.execute("SELECT * FROM clip_vectors WHERE clip_id = ?", (cid,)).fetchone()
+        vec_row = conn.execute(
+            "SELECT * FROM clip_vectors WHERE clip_id = ?", (cid,)
+        ).fetchone()
         assert vec_row is not None
         assert vec_row["model"] == "hash"
         assert vec_row["dim"] == mfm.EMBED_DIM
@@ -105,7 +111,9 @@ class TestInsertEvent:
     def test_inserts_event(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         mfm.insert_event(populated_db, cid)
-        events = populated_db.execute("SELECT * FROM clip_events WHERE clip_id = ?", (cid,)).fetchall()
+        events = populated_db.execute(
+            "SELECT * FROM clip_events WHERE clip_id = ?", (cid,)
+        ).fetchall()
         assert len(events) == 1
 
 
@@ -127,6 +135,7 @@ class TestPrune:
 # ──────────────────────────────────────────────
 # Settings
 # ──────────────────────────────────────────────
+
 
 class TestSettings:
     def test_get_default(self, conn):
@@ -308,12 +317,15 @@ class TestParseBoolValue:
 # Secrets
 # ──────────────────────────────────────────────
 
+
 class TestSecrets:
     def test_aws_key_detected(self):
         assert mfm.looks_like_secret("AKIAIOSFODNN7EXAMPLE") is True  # allow-secret
 
     def test_github_pat_detected(self):
-        assert mfm.looks_like_secret("ghp_ABCDEFghijklmnopqrstuvwxyz0123456789") is True  # allow-secret
+        assert (
+            mfm.looks_like_secret("ghp_ABCDEFghijklmnopqrstuvwxyz0123456789") is True
+        )  # allow-secret
 
     def test_private_key_detected(self):
         assert mfm.looks_like_secret("-----BEGIN RSA PRIVATE KEY") is True
@@ -347,6 +359,7 @@ class TestAllowSecrets:
 # ──────────────────────────────────────────────
 # Tags
 # ──────────────────────────────────────────────
+
 
 class TestTags:
     def test_get_or_create(self, conn):
@@ -408,6 +421,7 @@ class TestTags:
 # Notes
 # ──────────────────────────────────────────────
 
+
 class TestNotes:
     def test_add_note(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
@@ -426,6 +440,7 @@ class TestNotes:
 # ──────────────────────────────────────────────
 # Blocklist
 # ──────────────────────────────────────────────
+
 
 class TestBlocklist:
     def test_empty_by_default(self, conn):
@@ -455,6 +470,7 @@ class TestBlocklist:
 # ──────────────────────────────────────────────
 # Embeddings
 # ──────────────────────────────────────────────
+
 
 class TestTokenize:
     def test_basic(self):
@@ -538,13 +554,21 @@ class TestStoreAndLoadEmbedding:
     def test_round_trip(self, conn):
         conn.execute(
             "INSERT INTO clips (created_at, source_app, window_title, content, hash, pinned, lang) VALUES (?,?,?,?,?,0,'unk')",
-            ("2026-01-01", "App", "Win", "test", "abc", ),
+            (
+                "2026-01-01",
+                "App",
+                "Win",
+                "test",
+                "abc",
+            ),
         )
         conn.commit()
         cid = conn.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         vec = [0.1, 0.2, 0.3]
         mfm.store_embedding(conn, cid, vec, "hash")
-        row = conn.execute("SELECT * FROM clip_vectors WHERE clip_id = ?", (cid,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM clip_vectors WHERE clip_id = ?", (cid,)
+        ).fetchone()
         loaded = mfm.load_embedding(row)
         assert loaded == vec
 
@@ -552,6 +576,7 @@ class TestStoreAndLoadEmbedding:
 # ──────────────────────────────────────────────
 # Utility helpers
 # ──────────────────────────────────────────────
+
 
 class TestParseIsoDt:
     def test_valid(self):
@@ -653,8 +678,14 @@ class TestSyncPull:
         pulled = sqlite3.connect(local_db)
         backup = sqlite3.connect(local_db.with_suffix(".bak"))
         try:
-            assert pulled.execute("SELECT content FROM clips").fetchone()[0] == "remote content"
-            assert backup.execute("SELECT content FROM clips").fetchone()[0] == "local content"
+            assert (
+                pulled.execute("SELECT content FROM clips").fetchone()[0]
+                == "remote content"
+            )
+            assert (
+                backup.execute("SELECT content FROM clips").fetchone()[0]
+                == "local content"
+            )
         finally:
             pulled.close()
             backup.close()
@@ -692,7 +723,8 @@ class TestMaybeWatchSync:
         monkeypatch.setattr(
             mfm,
             "sync_push",
-            lambda target, source_conn=None: calls.append((target, source_conn is conn)) or (True, "ok"),
+            lambda target, source_conn=None: calls.append((target, source_conn is conn))
+            or (True, "ok"),
         )
 
         last_at, last_target = mfm.maybe_watch_sync(conn, None, "")
@@ -853,6 +885,7 @@ class TestCopilotChats:
 # filtered_rows — FTS5 search and filters
 # ──────────────────────────────────────────────
 
+
 class TestFilteredRows:
     def test_no_filters(self, populated_db):
         rows, tag_map = mfm.filtered_rows(populated_db, limit=10)
@@ -892,15 +925,23 @@ class TestFilteredRows:
         assert len(rows) == 1
 
     def test_filter_by_since_iso(self, populated_db):
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, since_iso="2026-01-16T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, since_iso="2026-01-16T00:00:00"
+        )
         assert len(rows) == 0
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, since_iso="2026-01-14T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, since_iso="2026-01-14T00:00:00"
+        )
         assert len(rows) == 3
 
     def test_filter_by_until_iso(self, populated_db):
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, until_iso="2026-01-14T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, until_iso="2026-01-14T00:00:00"
+        )
         assert len(rows) == 0
-        rows, _ = mfm.filtered_rows(populated_db, limit=10, until_iso="2026-01-16T00:00:00")
+        rows, _ = mfm.filtered_rows(
+            populated_db, limit=10, until_iso="2026-01-16T00:00:00"
+        )
         assert len(rows) == 3
 
     def test_combined_filters(self, populated_db):
@@ -910,7 +951,9 @@ class TestFilteredRows:
         assert len(rows) == 1
 
     def test_returns_tag_map(self, populated_db):
-        cids = [r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()]
+        cids = [
+            r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()
+        ]
         mfm.assign_tag(populated_db, cids[0], "alpha")
         mfm.assign_tag(populated_db, cids[1], "beta")
         rows, tag_map = mfm.filtered_rows(populated_db, limit=10)
@@ -921,6 +964,7 @@ class TestFilteredRows:
 # ──────────────────────────────────────────────
 # Eviction — per-app, per-tag, tiered
 # ──────────────────────────────────────────────
+
 
 class TestEvictAppCap:
     def test_noop_when_under_cap(self, conn):
@@ -1008,6 +1052,7 @@ class TestEvictIfNeeded:
 # Fetch and Context
 # ──────────────────────────────────────────────
 
+
 class TestFetchClip:
     def test_fetch_existing(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
@@ -1031,7 +1076,9 @@ class TestLatestClip:
 
 class TestContextBundle:
     def test_returns_dicts(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None
+        )
         assert len(bundle) == 3
         assert isinstance(bundle[0], dict)
         assert "id" in bundle[0]
@@ -1041,24 +1088,32 @@ class TestContextBundle:
         assert "pinned" in bundle[0]
 
     def test_filters_by_app(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app="Terminal", tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app="Terminal", tag=None, limit=10, hours=None
+        )
         assert len(bundle) == 1
         assert bundle[0]["source_app"] == "Terminal"
 
     def test_filters_by_tag(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         mfm.assign_tag(populated_db, cid, "urgent")
-        bundle = mfm.context_bundle(populated_db, app=None, tag="urgent", limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag="urgent", limit=10, hours=None
+        )
         assert len(bundle) == 1
 
     def test_respects_limit(self, populated_db):
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=2, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=2, hours=None
+        )
         assert len(bundle) == 2
 
     def test_includes_notes(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         mfm.add_note(populated_db, cid, "important note")
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None
+        )
         clip_with_note = [b for b in bundle if b["id"] == cid][0]
         assert len(clip_with_note["notes"]) == 1
 
@@ -1066,13 +1121,16 @@ class TestContextBundle:
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 1 WHERE id = ?", (cid,))
         populated_db.commit()
-        bundle = mfm.context_bundle(populated_db, app=None, tag=None, limit=10, hours=None, pins_only=True)
+        bundle = mfm.context_bundle(
+            populated_db, app=None, tag=None, limit=10, hours=None, pins_only=True
+        )
         assert len(bundle) == 1
 
 
 # ──────────────────────────────────────────────
 # Export / Import
 # ──────────────────────────────────────────────
+
 
 class TestExportItems:
     def test_exports_all(self, populated_db):
@@ -1094,8 +1152,18 @@ class TestExportItems:
 
 class TestInsertClipImport:
     def test_imports_new_clip(self, conn):
-        cid = mfm.insert_clip_import(conn, "imported content", "App", "Win",
-                                       "2026-06-01T00:00:00+00:00", False, "My Title", None, "en", None)
+        cid = mfm.insert_clip_import(
+            conn,
+            "imported content",
+            "App",
+            "Win",
+            "2026-06-01T00:00:00+00:00",
+            False,
+            "My Title",
+            None,
+            "en",
+            None,
+        )
         assert cid is not None
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
         assert row["title"] == "My Title"
@@ -1103,23 +1171,36 @@ class TestInsertClipImport:
         assert row["pinned"] == 0
 
     def test_rejects_empty(self, conn):
-        assert mfm.insert_clip_import(conn, "", "App", "Win", None, False, None, None, None, None) is None
+        assert (
+            mfm.insert_clip_import(
+                conn, "", "App", "Win", None, False, None, None, None, None
+            )
+            is None
+        )
 
     def test_deduplicates(self, conn):
-        cid1 = mfm.insert_clip_import(conn, "dedup me", "App", "Win", None, False, None, None, None, None)
-        cid2 = mfm.insert_clip_import(conn, "dedup me", "App", "Win", None, False, None, None, None, None)
+        cid1 = mfm.insert_clip_import(
+            conn, "dedup me", "App", "Win", None, False, None, None, None, None
+        )
+        cid2 = mfm.insert_clip_import(
+            conn, "dedup me", "App", "Win", None, False, None, None, None, None
+        )
         assert cid1 is not None
         assert cid2 == cid1
 
     def test_imports_pinned(self, conn):
-        cid = mfm.insert_clip_import(conn, "pinned clip", "App", "Win", None, True, None, None, None, None)
+        cid = mfm.insert_clip_import(
+            conn, "pinned clip", "App", "Win", None, True, None, None, None, None
+        )
         row = conn.execute("SELECT * FROM clips WHERE id = ?", (cid,)).fetchone()
         assert row["pinned"] == 1
 
 
 class TestIngestText:
     def test_ingests_with_tags(self, conn):
-        cid = mfm.ingest_text(conn, "tagged clip", "App", "Win", tags=["work", "urgent"])
+        cid = mfm.ingest_text(
+            conn, "tagged clip", "App", "Win", tags=["work", "urgent"]
+        )
         assert cid is not None
         tags = mfm.tags_for_clip(conn, cid)
         assert "work" in tags
@@ -1173,20 +1254,32 @@ class TestIngestTranscript:
         path = tmp_path / "standup.txt"
         path.write_text("Alice: status update", encoding="utf-8")
 
-        cid = mfm.ingest_transcript(conn, path, mfm.DEFAULT_MAX_BYTES, False, tags=["team"])
+        cid = mfm.ingest_transcript(
+            conn, path, mfm.DEFAULT_MAX_BYTES, False, tags=["team"]
+        )
 
         assert cid is not None
         row = mfm.fetch_clip(conn, cid)
         assert row["source_app"] == "meeting"
         assert row["title"] == "standup.txt"
-        assert {"meeting", "transcript", "team"}.issubset(set(mfm.tags_for_clip(conn, cid)))
+        assert {"meeting", "transcript", "team"}.issubset(
+            set(mfm.tags_for_clip(conn, cid))
+        )
 
 
 class TestImportClips:
     def test_imports_multiple(self, conn):
         items = [
-            {"content": "first", "source_app": "App", "created_at": "2026-01-01T00:00:00+00:00"},
-            {"content": "second", "source_app": "App", "created_at": "2026-01-02T00:00:00+00:00"},
+            {
+                "content": "first",
+                "source_app": "App",
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "content": "second",
+                "source_app": "App",
+                "created_at": "2026-01-02T00:00:00+00:00",
+            },
         ]
         result = mfm.import_clips(conn, items)
         assert result["inserted"] == 2
@@ -1209,6 +1302,7 @@ class TestImportClips:
 # ──────────────────────────────────────────────
 # Settings — typed, snapshot, formatting
 # ──────────────────────────────────────────────
+
 
 class TestGetSettingTyped:
     def test_unknown_key_falls_back_to_raw(self, conn):
@@ -1303,6 +1397,7 @@ class TestSettingsSnapshot:
 # Cap maps
 # ──────────────────────────────────────────────
 
+
 class TestCapMaps:
     def test_get_empty(self, conn):
         assert mfm.get_cap_map(conn, "cap_by_app") == {}
@@ -1326,6 +1421,7 @@ class TestCapMaps:
 # ──────────────────────────────────────────────
 # Allow PDF / Images
 # ──────────────────────────────────────────────
+
 
 class TestAllowPdf:
     def test_default(self, conn):
@@ -1359,6 +1455,7 @@ class TestAllowImages:
 # Build ANN Index
 # ──────────────────────────────────────────────
 
+
 class TestBuildAnnIndex:
     def test_empty(self, conn):
         rows = conn.execute("SELECT * FROM clip_vectors").fetchall()
@@ -1387,8 +1484,14 @@ class TestFetchSemanticCandidates:
     def test_filters_by_app_tag_pin_and_time(self, conn):
         keep = mfm.insert_clip(conn, "alpha project", "Terminal", "Win")
         other = mfm.insert_clip(conn, "beta project", "VSCode", "Win")
-        conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", ("2026-01-02T00:00:00+00:00", keep))
-        conn.execute("UPDATE clips SET created_at = ? WHERE id = ?", ("2026-01-04T00:00:00+00:00", other))
+        conn.execute(
+            "UPDATE clips SET created_at = ? WHERE id = ?",
+            ("2026-01-02T00:00:00+00:00", keep),
+        )
+        conn.execute(
+            "UPDATE clips SET created_at = ? WHERE id = ?",
+            ("2026-01-04T00:00:00+00:00", other),
+        )
         conn.execute("UPDATE clips SET pinned = 1 WHERE id = ?", (keep,))
         conn.commit()
         mfm.assign_tag(conn, keep, "focus")
@@ -1421,6 +1524,7 @@ class TestFetchSemanticCandidates:
 # Topic groups
 # ──────────────────────────────────────────────
 
+
 class TestTopicGroups:
     def test_groups_by_app_when_untagged(self, populated_db):
         groups = mfm.topic_groups(populated_db, limit_groups=5, per_group=5)
@@ -1429,7 +1533,9 @@ class TestTopicGroups:
         assert "Terminal" in app_names or "terminal" in app_names
 
     def test_groups_by_tag_when_tagged(self, populated_db):
-        cids = [r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()]
+        cids = [
+            r["id"] for r in populated_db.execute("SELECT id FROM clips").fetchall()
+        ]
         mfm.assign_tag(populated_db, cids[0], "project-x")
         groups = mfm.topic_groups(populated_db, limit_groups=5, per_group=5)
         group_names = {g["name"] for g in groups}
@@ -1444,6 +1550,7 @@ class TestTopicGroups:
 # Markdown Outline Export
 # ──────────────────────────────────────────────
 
+
 class TestBuildMarkdownOutline:
     def test_empty(self, conn):
         md, count = mfm.build_markdown_outline(conn, since_iso=None)
@@ -1456,9 +1563,13 @@ class TestBuildMarkdownOutline:
         assert "hello world" in md or "def main()" in md
 
     def test_with_since_filter(self, populated_db):
-        md, count = mfm.build_markdown_outline(populated_db, since_iso="2026-01-20T00:00:00")
+        md, count = mfm.build_markdown_outline(
+            populated_db, since_iso="2026-01-20T00:00:00"
+        )
         assert count == 0
-        md, count = mfm.build_markdown_outline(populated_db, since_iso="2026-01-14T00:00:00")
+        md, count = mfm.build_markdown_outline(
+            populated_db, since_iso="2026-01-14T00:00:00"
+        )
         assert count == 3
 
     def test_includes_tags(self, populated_db):
@@ -1472,6 +1583,7 @@ class TestBuildMarkdownOutline:
 # Language Detection
 # ──────────────────────────────────────────────
 
+
 class TestDetectLanguage:
     def test_fallback_when_langdetect_missing(self):
         lang = mfm.detect_language("Hello world")
@@ -1481,6 +1593,7 @@ class TestDetectLanguage:
 # ──────────────────────────────────────────────
 # Status Snapshot
 # ──────────────────────────────────────────────
+
 
 class TestStatusSnapshot:
     def test_returns_dict(self, conn):
@@ -1513,6 +1626,7 @@ class TestStatusSnapshot:
 # ──────────────────────────────────────────────
 # Helper utilities
 # ──────────────────────────────────────────────
+
 
 class TestReadTextFile:
     def test_reads_existing(self, tmp_path):
@@ -1568,7 +1682,9 @@ class TestRunUserHelperOnClip:
 
 class TestRunAiHelper:
     def test_requires_configured_command(self, conn):
-        ok, msg, new_id, out = mfm.run_ai_helper(conn, "ai_recall_cmd", None, 10, 1.0, False, "recall")
+        ok, msg, new_id, out = mfm.run_ai_helper(
+            conn, "ai_recall_cmd", None, 10, 1.0, False, "recall"
+        )
 
         assert ok is False
         assert "configure ai_recall_cmd" in msg
@@ -1578,7 +1694,9 @@ class TestRunAiHelper:
     def test_reports_no_clips(self, conn):
         mfm.set_setting(conn, "ai_recall_cmd", "cat")
 
-        ok, msg, new_id, out = mfm.run_ai_helper(conn, "ai_recall_cmd", None, 10, 1.0, False, "recall")
+        ok, msg, new_id, out = mfm.run_ai_helper(
+            conn, "ai_recall_cmd", None, 10, 1.0, False, "recall"
+        )
 
         assert ok is False
         assert msg == "no clips available"
@@ -1590,7 +1708,9 @@ class TestRunAiHelper:
         mfm.assign_tag(conn, original_id, "source")
         mfm.set_setting(conn, "ai_recall_cmd", "printf 'recall summary\\nbody\\n'")
 
-        ok, msg, new_id, out = mfm.run_ai_helper(conn, "ai_recall_cmd", None, 10, 1.0, True, "recall")
+        ok, msg, new_id, out = mfm.run_ai_helper(
+            conn, "ai_recall_cmd", None, 10, 1.0, True, "recall"
+        )
 
         assert ok is True
         assert msg == "helper output ok"
@@ -1598,7 +1718,9 @@ class TestRunAiHelper:
         assert out == "recall summary\nbody"
         row = mfm.fetch_clip(conn, new_id)
         assert row["title"] == "recall summary"
-        assert {"recall", "helper:ai_recall_cmd"}.issubset(set(mfm.tags_for_clip(conn, new_id)))
+        assert {"recall", "helper:ai_recall_cmd"}.issubset(
+            set(mfm.tags_for_clip(conn, new_id))
+        )
 
 
 class TestMcpBaseUrl:
@@ -1623,25 +1745,31 @@ class TestCopyToClipboard:
 # Pin / Unpin
 # ──────────────────────────────────────────────
 
+
 class TestPin:
     def test_pin_clip(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 1 WHERE id = ?", (cid,))
         populated_db.commit()
-        row = populated_db.execute("SELECT pinned FROM clips WHERE id = ?", (cid,)).fetchone()
+        row = populated_db.execute(
+            "SELECT pinned FROM clips WHERE id = ?", (cid,)
+        ).fetchone()
         assert row["pinned"] == 1
 
     def test_unpin_clip(self, populated_db):
         cid = populated_db.execute("SELECT id FROM clips LIMIT 1").fetchone()["id"]
         populated_db.execute("UPDATE clips SET pinned = 0 WHERE id = ?", (cid,))
         populated_db.commit()
-        row = populated_db.execute("SELECT pinned FROM clips WHERE id = ?", (cid,)).fetchone()
+        row = populated_db.execute(
+            "SELECT pinned FROM clips WHERE id = ?", (cid,)
+        ).fetchone()
         assert row["pinned"] == 0
 
 
 # ──────────────────────────────────────────────
 # Sync — get_sync_interval, write_db_snapshot
 # ──────────────────────────────────────────────
+
 
 class TestGetSyncInterval:
     def test_default(self, conn):
@@ -1684,6 +1812,7 @@ class TestWriteDbSnapshot:
 # Federation helpers
 # ──────────────────────────────────────────────
 
+
 class TestFederateHelpers:
     def test_cmd_federate_export_in_memory(self, conn):
         mfm.insert_clip(conn, "federated clip", "App", "Win")
@@ -1693,7 +1822,11 @@ class TestFederateHelpers:
 
     def test_cmd_federate_import_in_memory(self, conn):
         items = [
-            {"content": "from peer", "source_app": "PeerApp", "created_at": "2026-06-01T00:00:00+00:00"},
+            {
+                "content": "from peer",
+                "source_app": "PeerApp",
+                "created_at": "2026-06-01T00:00:00+00:00",
+            },
         ]
         result = mfm.import_clips(conn, items)
         assert result["inserted"] == 1
