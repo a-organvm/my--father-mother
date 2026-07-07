@@ -1,0 +1,11 @@
+{
+  "agent": "opencode",
+  "status": "idle",
+  "accepting_tasks": true,
+  "available_tokens": 44544288,
+  "available_pct": 89.1,
+  "current_task_id": "HEAL-cifix-organvm-my--father-mother-19",
+  "heartbeat": "2026-07-07T00:43:57.738103+00:00",
+  "token_usage_pct": 10.91,
+  "clock_health": "ok"
+}
